@@ -5,7 +5,7 @@ go 1.22.2
 require (
 	github.com/firebase/genkit/go v0.0.0-20240609043422-9c31d6578369
 	github.com/google/uuid v1.6.0
-	github.com/qdrant/go-client v1.9.0
+	github.com/qdrant/go-client v1.11.0
 	google.golang.org/grpc v1.64.0
 )
 

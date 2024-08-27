@@ -201,11 +201,20 @@ func (ds *docStore) Retrieve(ctx context.Context, req *ai.RetrieverRequest) (*ai
 		return nil, fmt.Errorf("qdrant retrieve embedding failed: %v", err)
 	}
 
-	response, err := ds.points_client.Search(context.TODO(), &pb.SearchPoints{
+	ulimit := uint64(limit)
+	response, err := ds.points_client.Query(context.TODO(), &pb.QueryPoints{
 		CollectionName: ds.collectionName,
-		Vector:         vector,
-		Limit:          uint64(limit),
-		Filter:         filter,
+		Query: &pb.Query{
+			Variant: &pb.Query_Nearest{
+				Nearest: &pb.VectorInput{
+					Variant: &pb.VectorInput_Dense{
+						Dense: &pb.DenseVector{Data: vector},
+					},
+				},
+			},
+		},
+		Limit:  &ulimit,
+		Filter: filter,
 		WithPayload: &pb.WithPayloadSelector{
 			SelectorOptions: &pb.WithPayloadSelector_Include{
 				Include: &pb.PayloadIncludeSelector{

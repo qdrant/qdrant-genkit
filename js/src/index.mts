@@ -144,15 +144,15 @@ export function qdrantRetriever<EmbedderCustomOptions extends z.ZodTypeAny>(
         content,
         options: embedderOptions,
       });
-      const results = await client.search(collectionName, {
-        vector: queryEmbeddings,
+      const results = await client.query(collectionName, {
+        query: queryEmbeddings,
         limit: options.k,
         filter: options.filter,
         with_payload: [contentKey, metadataKey],
         with_vector: false,
       });
 
-      const documents = results.map((result) => {
+      const documents = results.points.map((result) => {
         const content = result.payload?.[contentKey] ?? '';
         const metadata = result.payload?.[metadataKey] ?? {};
         return Document.fromText(content as string, metadata).toJSON();
