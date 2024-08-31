@@ -30,7 +30,7 @@ type Config struct {
 	UseTls          bool
 	ContentKey      string
 	MetadataKey     string
-	Embedder        ai.Embedder
+	Embedder        *ai.EmbedderAction
 	EmbedderOptions any
 }
 
@@ -74,12 +74,12 @@ func Init(ctx context.Context, cfg Config) (err error) {
 }
 
 // Indexer returns the indexer with the given collection name.
-func Indexer(name string) ai.Indexer {
+func Indexer(name string) *ai.IndexerAction {
 	return ai.LookupIndexer(provider, name)
 }
 
 // Retriever returns the retriever with the given collection name.
-func Retriever(name string) ai.Retriever {
+func Retriever(name string) *ai.RetrieverAction {
 	return ai.LookupRetriever(provider, name)
 }
 
@@ -97,7 +97,7 @@ type docStore struct {
 	points_client      pb.PointsClient
 	service_client     pb.QdrantClient
 	connection         *grpc.ClientConn
-	embedder           ai.Embedder
+	embedder           *ai.EmbedderAction
 	embedderOptions    any
 	contentPayloadKey  string
 	metadataPayloadKey string
@@ -111,24 +111,25 @@ func (ds *docStore) Index(ctx context.Context, req *ai.IndexerRequest) error {
 
 	// Use the embedder to convert each Document into a vector.
 	points := make([]*pb.PointStruct, 0, len(req.Documents))
-	ereq := &ai.EmbedRequest{
-		Documents: req.Documents,
-		Options:   ds.embedderOptions,
-	}
-	eres, err := ds.embedder.Embed(ctx, ereq)
-	if err != nil {
-		return fmt.Errorf("qdrant index embedding failed: %v", err)
-	}
-	for i, res := range eres.Embeddings {
-		id, err := generatePointId(req.Documents[i])
+	for _, doc := range req.Documents {
+		ereq := &ai.EmbedRequest{
+			Document: doc,
+			Options:  ds.embedderOptions,
+		}
+		vals, err := ai.Embed(ctx, ds.embedder, ereq)
+		if err != nil {
+			return fmt.Errorf("qdrant index embedding failed: %v", err)
+		}
+
+		id, err := generatePointId(doc)
 		if err != nil {
 			return err
 		}
 
-		metadata := newValueMap(req.Documents[i].Metadata)
+		metadata := newValueMap(doc.Metadata)
 
 		var sb strings.Builder
-		for _, p := range req.Documents[i].Content {
+		for _, p := range doc.Content {
 			sb.WriteString(p.Text)
 		}
 
@@ -141,7 +142,7 @@ func (ds *docStore) Index(ctx context.Context, req *ai.IndexerRequest) error {
 			Vectors: &pb.Vectors{
 				VectorsOptions: &pb.Vectors_Vector{
 					Vector: &pb.Vector{
-						Data: res.Embedding,
+						Data: vals,
 					},
 				},
 			},
@@ -162,7 +163,7 @@ func (ds *docStore) Index(ctx context.Context, req *ai.IndexerRequest) error {
 		points = append(points, point)
 	}
 
-	_, err = ds.points_client.Upsert(ctx, &pb.UpsertPoints{
+	_, err := ds.points_client.Upsert(ctx, &pb.UpsertPoints{
 		CollectionName: ds.collectionName,
 		Points:         points,
 	})
@@ -192,17 +193,17 @@ func (ds *docStore) Retrieve(ctx context.Context, req *ai.RetrieverRequest) (*ai
 	// Use the embedder to convert the document we want to
 	// retrieve into a vector.
 	ereq := &ai.EmbedRequest{
-		Documents: []*ai.Document{req.Document},
-		Options:   ds.embedderOptions,
+		Document: req.Document,
+		Options:  ds.embedderOptions,
 	}
-	vector, err := ds.embedder.Embed(ctx, ereq)
+	vector, err := ai.Embed(ctx, ds.embedder, ereq)
 	if err != nil {
 		return nil, fmt.Errorf("qdrant retrieve embedding failed: %v", err)
 	}
 
 	response, err := ds.points_client.Search(context.TODO(), &pb.SearchPoints{
 		CollectionName: ds.collectionName,
-		Vector:         vector.Embeddings[0].Embedding,
+		Vector:         vector,
 		Limit:          uint64(limit),
 		Filter:         filter,
 		WithPayload: &pb.WithPayloadSelector{
