@@ -2,6 +2,7 @@ package qdrant_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -17,21 +18,29 @@ func TestGenkit(t *testing.T) {
 
 	dim := 1536
 
+	v1 := make([]float32, dim)
+	v2 := make([]float32, dim)
+	v3 := make([]float32, dim)
+	for i := range v1 {
+		v1[i] = float32(i)
+		v2[i] = float32(i)
+		v3[i] = float32(dim - i)
+	}
+	v2[0] = 1
+
 	d1 := ai.DocumentFromText("hello1", nil)
+	d2 := ai.DocumentFromText("hello2", nil)
+	d3 := ai.DocumentFromText("goodbye", nil)
+
+	embedder := newFakeEmbedder()
+	embedder.Register(d1, v1)
+	embedder.Register(d2, v2)
+	embedder.Register(d3, v3)
 
 	cfg := qdrant.Config{
-		GrpcHost: "localhost",
-		Embedder: ai.DefineEmbedder("fake", "embedder3", func(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
-			embeddings := make([]*ai.DocumentEmbedding, len(req.Documents))
-			for i := range req.Documents {
-				embeddings[i] = &ai.DocumentEmbedding{
-					Embedding: make([]float32, dim),
-				}
-			}
-			return &ai.EmbedResponse{
-				Embeddings: embeddings,
-			}, nil
-		}),
+		GrpcHost:       "localhost",
+		Embedder:       ai.DefineEmbedder("fake", "embedder3", embedder.Embed),
+		CollectionName: collectionName,
 	}
 	if err := qdrant.Init(ctx, cfg); err != nil {
 		t.Fatal(err)
@@ -39,7 +48,11 @@ func TestGenkit(t *testing.T) {
 
 	indexerOptions := &qdrant.IndexerOptions{}
 
-	err := ai.Index(ctx, qdrant.Indexer(collectionName), ai.WithIndexerDocs(d1), ai.WithIndexerOpts(indexerOptions))
+	indexerReq := &ai.IndexerRequest{
+		Documents: []*ai.Document{d1, d2, d3},
+		Options:   indexerOptions,
+	}
+	err := ai.Index(ctx, qdrant.Indexer(collectionName), indexerReq)
 	if err != nil {
 		t.Fatalf("Index operation failed: %v", err)
 	}
@@ -48,7 +61,11 @@ func TestGenkit(t *testing.T) {
 		K: 2,
 	}
 
-	retrieverResp, err := ai.Retrieve(ctx, qdrant.Retriever(collectionName), ai.WithRetrieverText("hello"), ai.WithRetrieverOpts(retrieverOptions))
+	retrieverReq := &ai.RetrieverRequest{
+		Document: d1,
+		Options:  retrieverOptions,
+	}
+	retrieverResp, err := ai.Retrieve(ctx, qdrant.Retriever(collectionName), retrieverReq)
 	if err != nil {
 		t.Fatalf("Retrieve operation failed: %v", err)
 	}
@@ -63,4 +80,28 @@ func TestGenkit(t *testing.T) {
 			t.Errorf("returned doc text %q does not start with %q", text, "hello")
 		}
 	}
+}
+
+type embedder struct {
+	registry map[*ai.Document][]float32
+}
+
+// New returns a new fake embedder.
+func newFakeEmbedder() *embedder {
+	return &embedder{
+		registry: make(map[*ai.Document][]float32),
+	}
+}
+
+// Register records the value to return for a Document.
+func (e *embedder) Register(d *ai.Document, vals []float32) {
+	e.registry[d] = vals
+}
+
+func (e *embedder) Embed(ctx context.Context, req *ai.EmbedRequest) ([]float32, error) {
+	vals, ok := e.registry[req.Document]
+	if !ok {
+		return nil, errors.New("fake embedder called with unregistered document")
+	}
+	return vals, nil
 }
