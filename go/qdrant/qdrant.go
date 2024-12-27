@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
@@ -31,22 +30,6 @@ type Config struct {
 }
 
 func Init(ctx context.Context, cfg Config) (err error) {
-
-	defer func() {
-		if err != nil {
-			err = fmt.Errorf("qdrant.Init: %w", err)
-		}
-	}()
-
-	if !cfg.UseTls && cfg.ApiKey != "" {
-		log.Println("Warning: API key is set but TLS is not enabled. The API key will be sent in plaintext.")
-		log.Println("May fail when using Qdrant cloud.")
-	}
-
-	if err != nil {
-		return fmt.Errorf("failed to connect to Qdrant: %v", err)
-	}
-
 	client, err := qclient.NewClient(&qclient.Config{
 		Host:   cfg.GrpcHost,
 		Port:   cfg.Port,
