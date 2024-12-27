@@ -2,7 +2,6 @@ package qdrant
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,10 +11,6 @@ import (
 	"github.com/firebase/genkit/go/ai"
 	"github.com/google/uuid"
 	qclient "github.com/qdrant/go-client/qdrant"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 )
 
 const provider = "qdrant"
@@ -43,20 +38,11 @@ func Init(ctx context.Context, cfg Config) (err error) {
 		}
 	}()
 
-	var tlsCredential credentials.TransportCredentials
-
 	if !cfg.UseTls && cfg.ApiKey != "" {
 		log.Println("Warning: API key is set but TLS is not enabled. The API key will be sent in plaintext.")
 		log.Println("May fail when using Qdrant cloud.")
 	}
 
-	if cfg.UseTls {
-		tlsCredential = credentials.NewTLS(&tls.Config{})
-	} else {
-		tlsCredential = insecure.NewCredentials()
-	}
-
-	conn, err := grpc.NewClient(cfg.GrpcHost, grpc.WithTransportCredentials(tlsCredential), withApiKeyInterceptor(cfg.ApiKey))
 	if err != nil {
 		return fmt.Errorf("failed to connect to Qdrant: %v", err)
 	}
@@ -72,8 +58,7 @@ func Init(ctx context.Context, cfg Config) (err error) {
 		return fmt.Errorf("failed to instantiate Qdrant client: %w", err)
 	}
 	store := &docStore{
-		client:     client,
-		connection: conn,
+		client: client,
 	}
 
 	name := cfg.CollectionName
@@ -103,7 +88,6 @@ type RetrieverOptions struct {
 type docStore struct {
 	collectionName     string
 	client             *qclient.Client
-	connection         *grpc.ClientConn
 	embedder           ai.Embedder
 	embedderOptions    any
 	contentPayloadKey  string
@@ -230,12 +214,4 @@ func generatePointId(doc *ai.Document) (string, error) {
 	}
 	uuid := uuid.NewSHA1(uuid.NameSpaceDNS, b)
 	return uuid.String(), nil
-}
-
-// Appends "api-key" to the metadata for authentication
-func withApiKeyInterceptor(apiKey string) grpc.DialOption {
-	return grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		newCtx := metadata.AppendToOutgoingContext(ctx, "api-key", apiKey)
-		return invoker(newCtx, method, req, reply, cc, opts...)
-	})
 }
