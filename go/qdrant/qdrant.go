@@ -11,7 +11,7 @@ import (
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/google/uuid"
-	pb "github.com/qdrant/go-client/qdrant"
+	qclient "github.com/qdrant/go-client/qdrant"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -26,6 +26,7 @@ const metadataPayloadKey = "_metadata"
 type Config struct {
 	CollectionName  string
 	GrpcHost        string
+	Port            int
 	ApiKey          string
 	UseTls          bool
 	ContentKey      string
@@ -60,11 +61,19 @@ func Init(ctx context.Context, cfg Config) (err error) {
 		return fmt.Errorf("failed to connect to Qdrant: %v", err)
 	}
 
+	client, err := qclient.NewClient(&qclient.Config{
+		Host:   cfg.GrpcHost,
+		Port:   cfg.Port,
+		APIKey: cfg.ApiKey,
+		UseTLS: cfg.UseTls,
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to instantiate Qdrant client: %w", err)
+	}
 	store := &docStore{
-		collections_client: pb.NewCollectionsClient(conn),
-		points_client:      pb.NewPointsClient(conn),
-		service_client:     pb.NewQdrantClient(conn),
-		connection:         conn,
+		client:     client,
+		connection: conn,
 	}
 
 	name := cfg.CollectionName
@@ -86,16 +95,14 @@ func Retriever(name string) *ai.RetrieverAction {
 type IndexerOptions struct{}
 
 type RetrieverOptions struct {
-	Filter pb.Filter
+	Filter qclient.Filter
 	K      int // maximum number of values to retrieve
 }
 
 // docStore implements the genkit [ai.DocumentStore] interface.
 type docStore struct {
 	collectionName     string
-	collections_client pb.CollectionsClient
-	points_client      pb.PointsClient
-	service_client     pb.QdrantClient
+	client             *qclient.Client
 	connection         *grpc.ClientConn
 	embedder           *ai.EmbedderAction
 	embedderOptions    any
@@ -110,7 +117,7 @@ func (ds *docStore) Index(ctx context.Context, req *ai.IndexerRequest) error {
 	}
 
 	// Use the embedder to convert each Document into a vector.
-	points := make([]*pb.PointStruct, 0, len(req.Documents))
+	points := make([]*qclient.PointStruct, 0, len(req.Documents))
 	for _, doc := range req.Documents {
 		ereq := &ai.EmbedRequest{
 			Document: doc,
@@ -126,44 +133,23 @@ func (ds *docStore) Index(ctx context.Context, req *ai.IndexerRequest) error {
 			return err
 		}
 
-		metadata := newValueMap(doc.Metadata)
-
 		var sb strings.Builder
 		for _, p := range doc.Content {
 			sb.WriteString(p.Text)
 		}
 
-		point := &pb.PointStruct{
-			Id: &pb.PointId{
-				PointIdOptions: &pb.PointId_Uuid{
-					Uuid: id,
-				},
-			},
-			Vectors: &pb.Vectors{
-				VectorsOptions: &pb.Vectors_Vector{
-					Vector: &pb.Vector{
-						Data: vals,
-					},
-				},
-			},
-			Payload: map[string]*pb.Value{
-				contentPayloadKey: {
-					Kind: &pb.Value_StringValue{
-						StringValue: sb.String(),
-					},
-				},
-				metadataPayloadKey: {
-					Kind: &pb.Value_StructValue{
-						StructValue: &pb.Struct{
-							Fields: metadata,
-						},
-					},
-				},
-			}}
+		point := &qclient.PointStruct{
+			Id:      qclient.NewID(id),
+			Vectors: qclient.NewVectors(vals...),
+			Payload: qclient.NewValueMap(map[string]any{
+				contentPayloadKey:  sb.String(),
+				metadataPayloadKey: doc.Metadata,
+			}),
+		}
 		points = append(points, point)
 	}
 
-	_, err := ds.points_client.Upsert(ctx, &pb.UpsertPoints{
+	_, err := ds.client.Upsert(ctx, &qclient.UpsertPoints{
 		CollectionName: ds.collectionName,
 		Points:         points,
 	})
@@ -178,7 +164,7 @@ func (ds *docStore) Index(ctx context.Context, req *ai.IndexerRequest) error {
 // Retrieve implements the genkit Retriever.Retrieve method.
 func (ds *docStore) Retrieve(ctx context.Context, req *ai.RetrieverRequest) (*ai.RetrieverResponse, error) {
 	var (
-		filter *pb.Filter
+		filter *qclient.Filter
 		limit  int
 	)
 	if req.Options != nil {
@@ -201,25 +187,19 @@ func (ds *docStore) Retrieve(ctx context.Context, req *ai.RetrieverRequest) (*ai
 		return nil, fmt.Errorf("qdrant retrieve embedding failed: %v", err)
 	}
 
-	response, err := ds.points_client.Search(context.TODO(), &pb.SearchPoints{
+	response, err := ds.client.Query(context.TODO(), &qclient.QueryPoints{
 		CollectionName: ds.collectionName,
-		Vector:         vector,
-		Limit:          uint64(limit),
+		Query:          qclient.NewQuery(vector...),
+		Limit:          qclient.PtrOf(uint64(limit)),
 		Filter:         filter,
-		WithPayload: &pb.WithPayloadSelector{
-			SelectorOptions: &pb.WithPayloadSelector_Include{
-				Include: &pb.PayloadIncludeSelector{
-					Fields: []string{ds.contentPayloadKey, ds.metadataPayloadKey},
-				},
-			},
-		},
+		WithPayload:    qclient.NewWithPayloadInclude(ds.contentPayloadKey, ds.metadataPayloadKey),
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	var docs []*ai.Document
-	for _, result := range response.Result {
+	for _, result := range response {
 		content := result.Payload[ds.contentPayloadKey].GetStringValue()
 		if content == "" {
 			return nil, errors.New("qdrant retrieve failed to fetch original document text")
