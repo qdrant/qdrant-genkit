@@ -2,20 +2,14 @@ package qdrant
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
 	"github.com/google/uuid"
-	pb "github.com/qdrant/go-client/qdrant"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
+	qclient "github.com/qdrant/go-client/qdrant"
 )
 
 const provider = "qdrant"
@@ -26,45 +20,28 @@ const metadataPayloadKey = "_metadata"
 type Config struct {
 	CollectionName  string
 	GrpcHost        string
+	Port            int
 	ApiKey          string
 	UseTls          bool
 	ContentKey      string
 	MetadataKey     string
-	Embedder        *ai.EmbedderAction
+	Embedder        ai.Embedder
 	EmbedderOptions any
 }
 
 func Init(ctx context.Context, cfg Config) (err error) {
+	client, err := qclient.NewClient(&qclient.Config{
+		Host:   cfg.GrpcHost,
+		Port:   cfg.Port,
+		APIKey: cfg.ApiKey,
+		UseTLS: cfg.UseTls,
+	})
 
-	defer func() {
-		if err != nil {
-			err = fmt.Errorf("qdrant.Init: %w", err)
-		}
-	}()
-
-	var tlsCredential credentials.TransportCredentials
-
-	if !cfg.UseTls && cfg.ApiKey != "" {
-		log.Println("Warning: API key is set but TLS is not enabled. The API key will be sent in plaintext.")
-		log.Println("May fail when using Qdrant cloud.")
-	}
-
-	if cfg.UseTls {
-		tlsCredential = credentials.NewTLS(&tls.Config{})
-	} else {
-		tlsCredential = insecure.NewCredentials()
-	}
-
-	conn, err := grpc.NewClient(cfg.GrpcHost, grpc.WithTransportCredentials(tlsCredential), withApiKeyInterceptor(cfg.ApiKey))
 	if err != nil {
-		return fmt.Errorf("failed to connect to Qdrant: %v", err)
+		return fmt.Errorf("failed to instantiate Qdrant client: %w", err)
 	}
-
 	store := &docStore{
-		collections_client: pb.NewCollectionsClient(conn),
-		points_client:      pb.NewPointsClient(conn),
-		service_client:     pb.NewQdrantClient(conn),
-		connection:         conn,
+		client: client,
 	}
 
 	name := cfg.CollectionName
@@ -74,30 +51,27 @@ func Init(ctx context.Context, cfg Config) (err error) {
 }
 
 // Indexer returns the indexer with the given collection name.
-func Indexer(name string) *ai.IndexerAction {
+func Indexer(name string) ai.Indexer {
 	return ai.LookupIndexer(provider, name)
 }
 
 // Retriever returns the retriever with the given collection name.
-func Retriever(name string) *ai.RetrieverAction {
+func Retriever(name string) ai.Retriever {
 	return ai.LookupRetriever(provider, name)
 }
 
 type IndexerOptions struct{}
 
 type RetrieverOptions struct {
-	Filter pb.Filter
+	Filter qclient.Filter
 	K      int // maximum number of values to retrieve
 }
 
 // docStore implements the genkit [ai.DocumentStore] interface.
 type docStore struct {
 	collectionName     string
-	collections_client pb.CollectionsClient
-	points_client      pb.PointsClient
-	service_client     pb.QdrantClient
-	connection         *grpc.ClientConn
-	embedder           *ai.EmbedderAction
+	client             *qclient.Client
+	embedder           ai.Embedder
 	embedderOptions    any
 	contentPayloadKey  string
 	metadataPayloadKey string
@@ -109,14 +83,15 @@ func (ds *docStore) Index(ctx context.Context, req *ai.IndexerRequest) error {
 		return nil
 	}
 
+	ereq := &ai.EmbedRequest{
+		Documents: req.Documents,
+		Options:   ds.embedderOptions,
+	}
+	vals, err := ds.embedder.Embed(ctx, ereq)
 	// Use the embedder to convert each Document into a vector.
-	points := make([]*pb.PointStruct, 0, len(req.Documents))
-	for _, doc := range req.Documents {
-		ereq := &ai.EmbedRequest{
-			Document: doc,
-			Options:  ds.embedderOptions,
-		}
-		vals, err := ai.Embed(ctx, ds.embedder, ereq)
+	points := make([]*qclient.PointStruct, 0, len(req.Documents))
+	for i, doc := range req.Documents {
+
 		if err != nil {
 			return fmt.Errorf("qdrant index embedding failed: %v", err)
 		}
@@ -126,44 +101,23 @@ func (ds *docStore) Index(ctx context.Context, req *ai.IndexerRequest) error {
 			return err
 		}
 
-		metadata := newValueMap(doc.Metadata)
-
 		var sb strings.Builder
 		for _, p := range doc.Content {
 			sb.WriteString(p.Text)
 		}
 
-		point := &pb.PointStruct{
-			Id: &pb.PointId{
-				PointIdOptions: &pb.PointId_Uuid{
-					Uuid: id,
-				},
-			},
-			Vectors: &pb.Vectors{
-				VectorsOptions: &pb.Vectors_Vector{
-					Vector: &pb.Vector{
-						Data: vals,
-					},
-				},
-			},
-			Payload: map[string]*pb.Value{
-				contentPayloadKey: {
-					Kind: &pb.Value_StringValue{
-						StringValue: sb.String(),
-					},
-				},
-				metadataPayloadKey: {
-					Kind: &pb.Value_StructValue{
-						StructValue: &pb.Struct{
-							Fields: metadata,
-						},
-					},
-				},
-			}}
+		point := &qclient.PointStruct{
+			Id:      qclient.NewID(id),
+			Vectors: qclient.NewVectors(vals.Embeddings[i].Embedding...),
+			Payload: qclient.NewValueMap(map[string]any{
+				contentPayloadKey:  sb.String(),
+				metadataPayloadKey: doc.Metadata,
+			}),
+		}
 		points = append(points, point)
 	}
 
-	_, err := ds.points_client.Upsert(ctx, &pb.UpsertPoints{
+	_, err = ds.client.Upsert(ctx, &qclient.UpsertPoints{
 		CollectionName: ds.collectionName,
 		Points:         points,
 	})
@@ -178,7 +132,7 @@ func (ds *docStore) Index(ctx context.Context, req *ai.IndexerRequest) error {
 // Retrieve implements the genkit Retriever.Retrieve method.
 func (ds *docStore) Retrieve(ctx context.Context, req *ai.RetrieverRequest) (*ai.RetrieverResponse, error) {
 	var (
-		filter *pb.Filter
+		filter *qclient.Filter
 		limit  int
 	)
 	if req.Options != nil {
@@ -193,33 +147,27 @@ func (ds *docStore) Retrieve(ctx context.Context, req *ai.RetrieverRequest) (*ai
 	// Use the embedder to convert the document we want to
 	// retrieve into a vector.
 	ereq := &ai.EmbedRequest{
-		Document: req.Document,
-		Options:  ds.embedderOptions,
+		Documents: []*ai.Document{req.Document},
+		Options:   ds.embedderOptions,
 	}
-	vector, err := ai.Embed(ctx, ds.embedder, ereq)
+	vectors, err := ds.embedder.Embed(ctx, ereq)
 	if err != nil {
 		return nil, fmt.Errorf("qdrant retrieve embedding failed: %v", err)
 	}
 
-	response, err := ds.points_client.Search(context.TODO(), &pb.SearchPoints{
+	response, err := ds.client.Query(context.TODO(), &qclient.QueryPoints{
 		CollectionName: ds.collectionName,
-		Vector:         vector,
-		Limit:          uint64(limit),
+		Query:          qclient.NewQuery(vectors.Embeddings[0].Embedding...),
+		Limit:          qclient.PtrOf(uint64(limit)),
 		Filter:         filter,
-		WithPayload: &pb.WithPayloadSelector{
-			SelectorOptions: &pb.WithPayloadSelector_Include{
-				Include: &pb.PayloadIncludeSelector{
-					Fields: []string{ds.contentPayloadKey, ds.metadataPayloadKey},
-				},
-			},
-		},
+		WithPayload:    qclient.NewWithPayloadInclude(ds.contentPayloadKey, ds.metadataPayloadKey),
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	var docs []*ai.Document
-	for _, result := range response.Result {
+	for _, result := range response {
 		content := result.Payload[ds.contentPayloadKey].GetStringValue()
 		if content == "" {
 			return nil, errors.New("qdrant retrieve failed to fetch original document text")
@@ -249,12 +197,4 @@ func generatePointId(doc *ai.Document) (string, error) {
 	}
 	uuid := uuid.NewSHA1(uuid.NameSpaceDNS, b)
 	return uuid.String(), nil
-}
-
-// Appends "api-key" to the metadata for authentication
-func withApiKeyInterceptor(apiKey string) grpc.DialOption {
-	return grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		newCtx := metadata.AppendToOutgoingContext(ctx, "api-key", apiKey)
-		return invoker(newCtx, method, req, reply, cc, opts...)
-	})
 }

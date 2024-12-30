@@ -46,13 +46,7 @@ func TestGenkit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	indexerOptions := &qdrant.IndexerOptions{}
-
-	indexerReq := &ai.IndexerRequest{
-		Documents: []*ai.Document{d1, d2, d3},
-		Options:   indexerOptions,
-	}
-	err := ai.Index(ctx, qdrant.Indexer(collectionName), indexerReq)
+	err := ai.Index(ctx, qdrant.Indexer(collectionName), ai.WithIndexerDocs(d1, d2, d3))
 	if err != nil {
 		t.Fatalf("Index operation failed: %v", err)
 	}
@@ -61,11 +55,7 @@ func TestGenkit(t *testing.T) {
 		K: 2,
 	}
 
-	retrieverReq := &ai.RetrieverRequest{
-		Document: d1,
-		Options:  retrieverOptions,
-	}
-	retrieverResp, err := ai.Retrieve(ctx, qdrant.Retriever(collectionName), retrieverReq)
+	retrieverResp, err := ai.Retrieve(ctx, qdrant.Retriever(collectionName), ai.WithRetrieverDoc(d1), ai.WithRetrieverOpts(retrieverOptions))
 	if err != nil {
 		t.Fatalf("Retrieve operation failed: %v", err)
 	}
@@ -98,10 +88,19 @@ func (e *embedder) Register(d *ai.Document, vals []float32) {
 	e.registry[d] = vals
 }
 
-func (e *embedder) Embed(ctx context.Context, req *ai.EmbedRequest) ([]float32, error) {
-	vals, ok := e.registry[req.Document]
-	if !ok {
-		return nil, errors.New("fake embedder called with unregistered document")
+func (e *embedder) Embed(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
+	embeddings := make([]*ai.DocumentEmbedding, len(req.Documents))
+	for _, doc := range req.Documents {
+		vals, ok := e.registry[doc]
+		if !ok {
+			return nil, errors.New("fake embedder called with unregistered document")
+		}
+		embeddings = append(embeddings, &ai.DocumentEmbedding{
+			Embedding: vals,
+		})
 	}
-	return vals, nil
+
+	return &ai.EmbedResponse{
+		Embeddings: embeddings,
+	}, nil
 }
