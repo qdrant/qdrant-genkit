@@ -1,4 +1,4 @@
-module github.com/qdrant/genkitx-qdrant/go
+module github.com/qdrant/qdrant-genkit/go
 
 go 1.22.2
 

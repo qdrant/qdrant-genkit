@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
-	"github.com/qdrant/genkitx-qdrant/go/qdrant"
+	"github.com/qdrant/qdrant-genkit/go/qdrant"
 )
 
 func TestGenkit(t *testing.T) {
