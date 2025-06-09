@@ -8,28 +8,30 @@ import (
 	"strings"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
 	"github.com/google/uuid"
 	qclient "github.com/qdrant/go-client/qdrant"
 )
 
 const provider = "qdrant"
-const contentPayloadKey = "_content"
-const metadataPayloadKey = "_metadata"
+const defaultContentKey = "_content"
+const defaultMetadataKey = "_metadata"
 
-// New returns an [ai.DocumentStore] that uses Qdrant.
+// Config provides configuration options for Qdrant.
 type Config struct {
 	CollectionName  string
 	GrpcHost        string
 	Port            int
 	ApiKey          string
 	UseTls          bool
-	ContentKey      string
-	MetadataKey     string
+	ContentKey      string // Optional: defaults to "_content"
+	MetadataKey     string // Optional: defaults to "_metadata"
 	Embedder        ai.Embedder
 	EmbedderOptions any
 }
 
-func Init(ctx context.Context, cfg Config) (err error) {
+// Init initializes the Qdrant plugin.
+func Init(ctx context.Context, g *genkit.Genkit, cfg Config) (err error) {
 	client, err := qclient.NewClient(&qclient.Config{
 		Host:   cfg.GrpcHost,
 		Port:   cfg.Port,
@@ -40,24 +42,39 @@ func Init(ctx context.Context, cfg Config) (err error) {
 	if err != nil {
 		return fmt.Errorf("failed to instantiate Qdrant client: %w", err)
 	}
+
+	contentKey := cfg.ContentKey
+	if contentKey == "" {
+		contentKey = defaultContentKey
+	}
+	metadataKey := cfg.MetadataKey
+	if metadataKey == "" {
+		metadataKey = defaultMetadataKey
+	}
+
 	store := &docStore{
-		client: client,
+		client:             client,
+		collectionName:     cfg.CollectionName,
+		embedder:           cfg.Embedder,
+		embedderOptions:    cfg.EmbedderOptions,
+		contentPayloadKey:  contentKey,
+		metadataPayloadKey: metadataKey,
 	}
 
 	name := cfg.CollectionName
-	ai.DefineIndexer(provider, name, store.Index)
-	ai.DefineRetriever(provider, name, store.Retrieve)
+	genkit.DefineIndexer(g, provider, name, store.Index)
+	genkit.DefineRetriever(g, provider, name, store.Retrieve)
 	return nil
 }
 
 // Indexer returns the indexer with the given collection name.
-func Indexer(name string) ai.Indexer {
-	return ai.LookupIndexer(provider, name)
+func Indexer(g *genkit.Genkit, name string) ai.Indexer {
+	return genkit.LookupIndexer(g, provider, name)
 }
 
 // Retriever returns the retriever with the given collection name.
-func Retriever(name string) ai.Retriever {
-	return ai.LookupRetriever(provider, name)
+func Retriever(g *genkit.Genkit, name string) ai.Retriever {
+	return genkit.LookupRetriever(g, provider, name)
 }
 
 type IndexerOptions struct{}
@@ -84,18 +101,17 @@ func (ds *docStore) Index(ctx context.Context, req *ai.IndexerRequest) error {
 	}
 
 	ereq := &ai.EmbedRequest{
-		Documents: req.Documents,
-		Options:   ds.embedderOptions,
+		Input:   req.Documents,
+		Options: ds.embedderOptions,
 	}
 	vals, err := ds.embedder.Embed(ctx, ereq)
+	if err != nil {
+		return fmt.Errorf("qdrant index embedding failed: %v", err)
+	}
+
 	// Use the embedder to convert each Document into a vector.
 	points := make([]*qclient.PointStruct, 0, len(req.Documents))
 	for i, doc := range req.Documents {
-
-		if err != nil {
-			return fmt.Errorf("qdrant index embedding failed: %v", err)
-		}
-
 		id, err := generatePointId(doc)
 		if err != nil {
 			return err
@@ -110,8 +126,8 @@ func (ds *docStore) Index(ctx context.Context, req *ai.IndexerRequest) error {
 			Id:      qclient.NewID(id),
 			Vectors: qclient.NewVectors(vals.Embeddings[i].Embedding...),
 			Payload: qclient.NewValueMap(map[string]any{
-				contentPayloadKey:  sb.String(),
-				metadataPayloadKey: doc.Metadata,
+				ds.contentPayloadKey:  sb.String(),
+				ds.metadataPayloadKey: doc.Metadata,
 			}),
 		}
 		points = append(points, point)
@@ -147,8 +163,8 @@ func (ds *docStore) Retrieve(ctx context.Context, req *ai.RetrieverRequest) (*ai
 	// Use the embedder to convert the document we want to
 	// retrieve into a vector.
 	ereq := &ai.EmbedRequest{
-		Documents: []*ai.Document{req.Document},
-		Options:   ds.embedderOptions,
+		Input:   []*ai.Document{req.Query},
+		Options: ds.embedderOptions,
 	}
 	vectors, err := ds.embedder.Embed(ctx, ereq)
 	if err != nil {

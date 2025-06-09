@@ -7,15 +7,13 @@ import (
 	"testing"
 
 	"github.com/firebase/genkit/go/ai"
+	"github.com/firebase/genkit/go/genkit"
 	"github.com/qdrant/qdrant-genkit/go/qdrant"
 )
 
 func TestGenkit(t *testing.T) {
-
 	ctx := context.Background()
-
 	collectionName := "test-genkitx-qdrant"
-
 	dim := 1536
 
 	v1 := make([]float32, dim)
@@ -32,6 +30,11 @@ func TestGenkit(t *testing.T) {
 	d2 := ai.DocumentFromText("hello2", nil)
 	d3 := ai.DocumentFromText("goodbye", nil)
 
+	g, err := genkit.Init(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	embedder := newFakeEmbedder()
 	embedder.Register(d1, v1)
 	embedder.Register(d2, v2)
@@ -39,14 +42,18 @@ func TestGenkit(t *testing.T) {
 
 	cfg := qdrant.Config{
 		GrpcHost:       "localhost",
-		Embedder:       ai.DefineEmbedder("fake", "embedder3", embedder.Embed),
+		Port:           6334,
 		CollectionName: collectionName,
+		Embedder:       genkit.DefineEmbedder(g, "fake", "embedder3", embedder.Embed),
 	}
-	if err := qdrant.Init(ctx, cfg); err != nil {
+	if err := qdrant.Init(ctx, g, cfg); err != nil {
 		t.Fatal(err)
 	}
 
-	err := ai.Index(ctx, qdrant.Indexer(collectionName), ai.WithIndexerDocs(d1, d2, d3))
+	indexer := qdrant.Indexer(g, collectionName)
+	err = indexer.Index(ctx, &ai.IndexerRequest{
+		Documents: []*ai.Document{d1, d2, d3},
+	})
 	if err != nil {
 		t.Fatalf("Index operation failed: %v", err)
 	}
@@ -55,7 +62,11 @@ func TestGenkit(t *testing.T) {
 		K: 2,
 	}
 
-	retrieverResp, err := ai.Retrieve(ctx, qdrant.Retriever(collectionName), ai.WithRetrieverDoc(d1), ai.WithRetrieverOpts(retrieverOptions))
+	retriever := qdrant.Retriever(g, collectionName)
+	retrieverResp, err := retriever.Retrieve(ctx, &ai.RetrieverRequest{
+		Query:   d1,
+		Options: retrieverOptions,
+	})
 	if err != nil {
 		t.Fatalf("Retrieve operation failed: %v", err)
 	}
@@ -76,28 +87,26 @@ type embedder struct {
 	registry map[*ai.Document][]float32
 }
 
-// New returns a new fake embedder.
 func newFakeEmbedder() *embedder {
 	return &embedder{
 		registry: make(map[*ai.Document][]float32),
 	}
 }
 
-// Register records the value to return for a Document.
 func (e *embedder) Register(d *ai.Document, vals []float32) {
 	e.registry[d] = vals
 }
 
 func (e *embedder) Embed(ctx context.Context, req *ai.EmbedRequest) (*ai.EmbedResponse, error) {
-	embeddings := make([]*ai.DocumentEmbedding, len(req.Documents))
-	for _, doc := range req.Documents {
+	embeddings := make([]*ai.Embedding, len(req.Input))
+	for i, doc := range req.Input {
 		vals, ok := e.registry[doc]
 		if !ok {
 			return nil, errors.New("fake embedder called with unregistered document")
 		}
-		embeddings = append(embeddings, &ai.DocumentEmbedding{
+		embeddings[i] = &ai.Embedding{
 			Embedding: vals,
-		})
+		}
 	}
 
 	return &ai.EmbedResponse{
