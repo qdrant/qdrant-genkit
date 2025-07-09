@@ -20,7 +20,7 @@ const ai = genkit({
         qdrant([
             {
                 embedder: googleAI.embedder('text-embedding-004'),
-                collectionName: 'menuQA',
+                collectionName: 'collectionName',
                 clientParams: {
                     url: 'http://localhost:6333',
                 }
