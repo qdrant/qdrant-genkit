@@ -15,20 +15,18 @@ To use this plugin, specify it when you call `configureGenkit()`:
 ```js
 import { qdrant } from 'genkitx-qdrant';
 
-export default configureGenkit({
-  plugins: [
-    qdrant([
-      {
-        clientParams: {
-          host: 'localhost',
-          port: 6333,
-        },
-        collectionName: 'some-collection',
-        embedder: textEmbeddingGecko,
-      },
-    ]),
-  ],
-  // ...
+const ai = genkit({
+    plugins: [
+        qdrant([
+            {
+                embedder: googleAI.embedder('text-embedding-004'),
+                collectionName: 'menuQA',
+                clientParams: {
+                    url: 'http://localhost:6333',
+                }
+            }
+        ]),
+    ],
 });
 ```
 
@@ -53,6 +51,12 @@ addition, there are a few optional parameters:
   metadataPayloadKey: 'metadata';
   ```
 
+- `dataTypePayloadKey`: Name of the payload filed with the document datatype. Defaults to "_content_type".
+
+  ```js
+  dataTypePayloadKey: '_datatype';
+  ```
+
 - `collectionCreateOptions`: [Additional options](<(https://qdrant.tech/documentation/concepts/collections/#create-a-collection)>) when creating the Qdrant collection.
 
 ## Usage
@@ -66,21 +70,13 @@ import { qdrantIndexerRef, qdrantRetrieverRef } from 'genkitx-qdrant';
 Then, pass the references to `retrieve()` and `index()`:
 
 ```js
-// To specify an index:
-export const qdrantIndexer = qdrantIndexerRef({
-  collectionName: 'some-collection',
-  displayName: 'Some Collection indexer',
-});
-await index({ indexer: qdrantIndexer, documents });
+// To export an indexer:
+export const qdrantIndexer = qdrantIndexerRef('collectionName', 'displayName');
 ```
 
 ```js
-// To specify a retriever:
-export const qdrantRetriever = qdrantRetrieverRef({
-  collectionName: 'some-collection',
-  displayName: 'Some Collection Retriever',
-});https://github.com/qdrant/qdrant-genkit
-let docs = await retrieve({ retriever: qdrantRetriever, query });
+// To export a retriever:
+export const qdrantRetriever = qdrantRetrieverRef('collectionName', 'displayName');
 ```
 
 You can refer to [Retrieval-augmented generation](https://firebase.google.com/docs/genkit/rag) for a general

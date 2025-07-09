@@ -73,14 +73,11 @@ interface QdrantPluginParams<E extends z.ZodTypeAny = z.ZodTypeAny> {
  * @param params.displayName  A display name for the retriever. If not specified, the default label will be `Qdrant - <collectionName>`
  * @returns A reference to a Qdrant retriever.
  */
-export const qdrantRetrieverRef = (params: {
-  collectionName: string;
-  displayName?: string;
-}) => {
+export const qdrantRetrieverRef = (collectionName: string, displayName: string | null = null) => {
   return retrieverRef({
-    name: `qdrant/${params.collectionName}`,
+    name: `qdrant/${collectionName}`,
     info: {
-      label: params.displayName ?? `Qdrant - ${params.collectionName}`,
+      label: displayName ?? `Qdrant - ${collectionName}`,
     },
     configSchema: QdrantRetrieverOptionsSchema,
   });
@@ -93,14 +90,11 @@ export const qdrantRetrieverRef = (params: {
  * @param params.displayName  A display name for the indexer. If not specified, the default label will be `Qdrant - <collectionName>`
  * @returns A reference to a Qdrant indexer.
  */
-export const qdrantIndexerRef = (params: {
-  collectionName: string;
-  displayName?: string;
-}) => {
+export const qdrantIndexerRef = (collectionName: string, displayName: string | null = null) => {
   return indexerRef({
-    name: `qdrant/${params.collectionName}`,
+    name: `qdrant/${collectionName}`,
     info: {
-      label: params.displayName ?? `Qdrant - ${params.collectionName}`,
+      label: displayName ?? `Qdrant - ${collectionName}`,
     },
     configSchema: QdrantIndexerOptionsSchema,
   });
