@@ -67,15 +67,15 @@ Import retriever and indexer references like so:
 import { qdrantIndexerRef, qdrantRetrieverRef } from 'genkitx-qdrant';
 ```
 
-Then, pass the references to `retrieve()` and `index()`:
+Then, pass their references to `retrieve()` and `index()`:
 
 ```js
-// To export an indexer:
+// To export an indexer reference:
 export const qdrantIndexer = qdrantIndexerRef('collectionName', 'displayName');
 ```
 
 ```js
-// To export a retriever:
+// To export a retriever reference:
 export const qdrantRetriever = qdrantRetrieverRef('collectionName', 'displayName');
 ```
 
