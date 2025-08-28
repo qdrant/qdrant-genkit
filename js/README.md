@@ -79,5 +79,4 @@ export const qdrantIndexer = qdrantIndexerRef('collectionName', 'displayName');
 export const qdrantRetriever = qdrantRetrieverRef('collectionName', 'displayName');
 ```
 
-You can refer to [Retrieval-augmented generation](https://firebase.google.com/docs/genkit/rag) for a general
-discussion on indexers and retrievers.
+You can refer to [Retrieval-augmented generation](https://firebase.google.com/docs/genkit/rag) for a general discussion on indexers and retrievers.
