@@ -16,6 +16,7 @@ const FilterType: z.ZodType<Schemas['Filter']> = z.any();
 const QdrantRetrieverOptionsSchema = CommonRetrieverOptionsSchema.extend({
   k: z.number().default(10),
   filter: FilterType.optional(),
+  scoreThreshold: z.number().optional(),
 });
 
 export const QdrantIndexerOptionsSchema = z.null().optional();
@@ -142,23 +143,35 @@ export function configureQdrantRetriever<
         content,
         options: embedderOptions,
       });
-      const results = (
-        await client.query(collectionName, {
-          query: queryEmbeddings[0].embedding,
-          limit: options.k,
-          filter: options.filter,
-          with_payload: [contentKey, metadataKey, dataTypeKey],
-          with_vector: false,
-        })
-      ).points;
+      const queryOptions = {
+        query: queryEmbeddings[0].embedding,
+        limit: options.k,
+        filter: options.filter,
+        with_payload: [contentKey, metadataKey, dataTypeKey],
+        with_vector: false,
+      };
+      
+      // Add score_threshold if provided
+      if (options.scoreThreshold !== undefined) {
+        queryOptions.score_threshold = options.scoreThreshold;
+      }
+      
+      const results = (await client.query(collectionName, queryOptions)).points;
       const documents = results.map((result) => {
         const content = result.payload?.[contentKey] ?? '';
         const metadata = result.payload?.[metadataKey] ?? {};
         const dataType = result.payload?.[dataTypeKey] ?? 'text';
+        
+        // Include the similarity score in metadata
+        const enrichedMetadata = {
+          ...metadata,
+          score: result.score ?? 0,
+        };
+        
         return Document.fromData(
           content as string,
           dataType as string,
-          metadata as Record<string, unknown>,
+          enrichedMetadata as Record<string, unknown>,
         ).toJSON();
       });
       return {
