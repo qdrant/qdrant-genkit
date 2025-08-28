@@ -16,6 +16,7 @@ const FilterType: z.ZodType<Schemas['Filter']> = z.any();
 const QdrantRetrieverOptionsSchema = CommonRetrieverOptionsSchema.extend({
   k: z.number().default(10),
   filter: FilterType.optional(),
+  scoreThreshold: z.number().optional(),
 });
 
 export const QdrantIndexerOptionsSchema = z.null().optional();
@@ -147,13 +148,17 @@ export function configureQdrantRetriever<
           query: queryEmbeddings[0].embedding,
           limit: options.k,
           filter: options.filter,
+          score_threshold: options.scoreThreshold,
           with_payload: [contentKey, metadataKey, dataTypeKey],
           with_vector: false,
         })
       ).points;
       const documents = results.map((result) => {
         const content = result.payload?.[contentKey] ?? '';
-        const metadata = result.payload?.[metadataKey] ?? {};
+        const metadata = {
+          ...(result.payload?.[metadataKey] ?? {}),
+          _similarityScore: result.score,
+        } as Record<string, unknown>;
         const dataType = result.payload?.[dataTypeKey] ?? 'text';
         return Document.fromData(
           content as string,
