@@ -8,7 +8,7 @@ import {
 import type { QdrantClientParams, Schemas } from '@qdrant/js-client-rest';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { z, type Genkit } from 'genkit';
-import { genkitPlugin } from 'genkit/plugin';
+import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
 import { v5 as uuidv5 } from 'uuid';
 
 const FilterType: z.ZodType<Schemas['Filter']> = z.any();
@@ -74,7 +74,10 @@ interface QdrantPluginParams<E extends z.ZodTypeAny = z.ZodTypeAny> {
  * @param params.displayName  A display name for the retriever. If not specified, the default label will be `Qdrant - <collectionName>`
  * @returns A reference to a Qdrant retriever.
  */
-export const qdrantRetrieverRef = (collectionName: string, displayName: string | null = null) => {
+export const qdrantRetrieverRef = (
+  collectionName: string,
+  displayName: string | null = null,
+) => {
   return retrieverRef({
     name: `qdrant/${collectionName}`,
     info: {
@@ -91,7 +94,10 @@ export const qdrantRetrieverRef = (collectionName: string, displayName: string |
  * @param params.displayName  A display name for the indexer. If not specified, the default label will be `Qdrant - <collectionName>`
  * @returns A reference to a Qdrant indexer.
  */
-export const qdrantIndexerRef = (collectionName: string, displayName: string | null = null) => {
+export const qdrantIndexerRef = (
+  collectionName: string,
+  displayName: string | null = null,
+) => {
   return indexerRef({
     name: `qdrant/${collectionName}`,
     info: {
@@ -107,7 +113,7 @@ export const qdrantIndexerRef = (collectionName: string, displayName: string | n
  */
 export function qdrant<EmbedderCustomOptions extends z.ZodTypeAny>(
   params: QdrantPluginParams<EmbedderCustomOptions>[],
-) {
+): GenkitPlugin {
   return genkitPlugin('qdrant', async (ai) => {
     params.forEach((p) => configureQdrantRetriever(ai, p));
     params.forEach((p) => configureQdrantIndexer(ai, p));
