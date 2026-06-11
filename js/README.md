@@ -80,3 +80,26 @@ export const qdrantRetriever = qdrantRetrieverRef('collectionName', 'displayName
 ```
 
 You can refer to [Retrieval-augmented generation](https://firebase.google.com/docs/genkit/rag) for a general discussion on indexers and retrievers.
+
+### Score boosting / fusion (Query API passthrough)
+
+The retriever options accept optional `query` and `prefetch` fields that are forwarded to the Qdrant [Query API](https://qdrant.tech/documentation/concepts/search/#query-api). When `query` is set, the retriever runs a two-stage request: the embedded vector becomes a `prefetch` (overridable via `prefetch`) and `query` reranks the candidates. This enables server-side formula boosting, fusion (RRF), and multi-stage prefetch without leaving the retriever.
+
+```js
+const docs = await ai.retrieve({
+  retriever: qdrantRetriever,
+  query: 'wireless headphones',
+  options: {
+    k: 20,
+    // Rerank prefetched candidates by a formula mixing the vector score with a
+    // payload signal (e.g. boost in-stock items).
+    query: {
+      formula: {
+        sum: ['$score', { mult: [0.2, 'in_stock'] }],
+      },
+    },
+  },
+});
+```
+
+When neither `query` nor `prefetch` is provided, behaviour is unchanged — a plain vector query.

@@ -12,11 +12,21 @@ import { genkitPlugin } from 'genkit/plugin';
 import { v5 as uuidv5 } from 'uuid';
 
 const FilterType: z.ZodType<Schemas['Filter']> = z.any();
+const PrefetchType: z.ZodType<Schemas['Prefetch'] | Schemas['Prefetch'][]> =
+  z.any();
+const QueryType: z.ZodType<Schemas['Query']> = z.any();
 
 const QdrantRetrieverOptionsSchema = CommonRetrieverOptionsSchema.extend({
   k: z.number().default(10),
   filter: FilterType.optional(),
   scoreThreshold: z.number().optional(),
+  // Optional Query API passthrough. When `query` is set, the retriever runs a
+  // two-stage request: the embedded vector becomes a `prefetch` (overridable
+  // via `prefetch`) and `query` reranks the candidates — enabling server-side
+  // formula boosting, fusion (RRF), and multi-stage prefetch. When omitted,
+  // behaviour is unchanged (a plain vector query).
+  prefetch: PrefetchType.optional(),
+  query: QueryType.optional(),
 });
 
 export const QdrantIndexerOptionsSchema = z.null().optional();
@@ -74,7 +84,10 @@ interface QdrantPluginParams<E extends z.ZodTypeAny = z.ZodTypeAny> {
  * @param params.displayName  A display name for the retriever. If not specified, the default label will be `Qdrant - <collectionName>`
  * @returns A reference to a Qdrant retriever.
  */
-export const qdrantRetrieverRef = (collectionName: string, displayName: string | null = null) => {
+export const qdrantRetrieverRef = (
+  collectionName: string,
+  displayName: string | null = null,
+) => {
   return retrieverRef({
     name: `qdrant/${collectionName}`,
     info: {
@@ -91,7 +104,10 @@ export const qdrantRetrieverRef = (collectionName: string, displayName: string |
  * @param params.displayName  A display name for the indexer. If not specified, the default label will be `Qdrant - <collectionName>`
  * @returns A reference to a Qdrant indexer.
  */
-export const qdrantIndexerRef = (collectionName: string, displayName: string | null = null) => {
+export const qdrantIndexerRef = (
+  collectionName: string,
+  displayName: string | null = null,
+) => {
   return indexerRef({
     name: `qdrant/${collectionName}`,
     info: {
@@ -143,16 +159,32 @@ export function configureQdrantRetriever<
         content,
         options: embedderOptions,
       });
-      const results = (
-        await client.query(collectionName, {
-          query: queryEmbeddings[0].embedding,
-          limit: options.k,
-          filter: options.filter,
-          score_threshold: options.scoreThreshold,
-          with_payload: [contentKey, metadataKey, dataTypeKey],
-          with_vector: false,
-        })
-      ).points;
+      const embedding = queryEmbeddings[0].embedding;
+      const queryRequest = options.query
+        ? {
+            // Two-stage: prefetch candidates by vector, then rerank with `query`
+            // (formula / fusion / …). `prefetch` is overridable; defaults to the
+            // embedded vector limited to `k`.
+            prefetch: options.prefetch ?? {
+              query: embedding,
+              limit: options.k,
+            },
+            query: options.query,
+            limit: options.k,
+            filter: options.filter,
+            with_payload: [contentKey, metadataKey, dataTypeKey],
+            with_vector: false,
+          }
+        : {
+            // Default: plain vector query (unchanged behaviour).
+            query: embedding,
+            limit: options.k,
+            filter: options.filter,
+            score_threshold: options.scoreThreshold,
+            with_payload: [contentKey, metadataKey, dataTypeKey],
+            with_vector: false,
+          };
+      const results = (await client.query(collectionName, queryRequest)).points;
       const documents = results.map((result) => {
         const content = result.payload?.[contentKey] ?? '';
         const metadata = {
