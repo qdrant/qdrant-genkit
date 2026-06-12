@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   npm-release:
     name: NPM Publish
@@ -19,7 +23,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - name: NPM Publish
         run: |
-          npm publish
+          npm i && npm run build && npm publish --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         working-directory: ./js
