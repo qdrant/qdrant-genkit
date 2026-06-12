@@ -4,11 +4,13 @@ import {
   Document,
   indexerRef,
   retrieverRef,
+  type RetrieverAction,
+  type RetrieverReference,
 } from '@genkit-ai/ai/retriever';
 import type { QdrantClientParams, Schemas } from '@qdrant/js-client-rest';
 import { QdrantClient } from '@qdrant/js-client-rest';
 import { z, type Genkit } from 'genkit';
-import { genkitPlugin } from 'genkit/plugin';
+import { genkitPlugin, type GenkitPlugin } from 'genkit/plugin';
 import { v5 as uuidv5 } from 'uuid';
 
 const FilterType: z.ZodType<Schemas['Filter']> = z.any();
@@ -16,11 +18,16 @@ const PrefetchType: z.ZodType<Schemas['Prefetch'] | Schemas['Prefetch'][]> =
   z.any();
 const QueryType: z.ZodType<Schemas['Query']> = z.any();
 
-const QdrantRetrieverOptionsSchema = CommonRetrieverOptionsSchema.extend({
+const QdrantRetrieverOptionsSchema: z.ZodObject<{
+  k: z.ZodDefault<z.ZodNumber>;
+  filter: z.ZodOptional<typeof FilterType>;
+  scoreThreshold: z.ZodOptional<z.ZodNumber>;
+  prefetch: z.ZodOptional<typeof PrefetchType>;
+  query: z.ZodOptional<typeof QueryType>;
+}> = CommonRetrieverOptionsSchema.extend({
   k: z.number().default(10),
   filter: FilterType.optional(),
   scoreThreshold: z.number().optional(),
-  // Optional Query API passthrough for formula boosting / fusion (RRF).
   prefetch: PrefetchType.optional(),
   query: QueryType.optional(),
 });
@@ -83,7 +90,7 @@ interface QdrantPluginParams<E extends z.ZodTypeAny = z.ZodTypeAny> {
 export const qdrantRetrieverRef = (
   collectionName: string,
   displayName: string | null = null,
-) => {
+): RetrieverReference<typeof QdrantRetrieverOptionsSchema> => {
   return retrieverRef({
     name: `qdrant/${collectionName}`,
     info: {
@@ -119,7 +126,7 @@ export const qdrantIndexerRef = (
  */
 export function qdrant<EmbedderCustomOptions extends z.ZodTypeAny>(
   params: QdrantPluginParams<EmbedderCustomOptions>[],
-) {
+): GenkitPlugin {
   return genkitPlugin('qdrant', async (ai) => {
     params.forEach((p) => configureQdrantRetriever(ai, p));
     params.forEach((p) => configureQdrantIndexer(ai, p));
@@ -130,7 +137,10 @@ export default qdrant;
 
 export function configureQdrantRetriever<
   EmbedderCustomOptions extends z.ZodTypeAny,
->(ai: Genkit, params: QdrantPluginParams<EmbedderCustomOptions>) {
+>(
+  ai: Genkit,
+  params: QdrantPluginParams<EmbedderCustomOptions>,
+): RetrieverAction<typeof QdrantRetrieverOptionsSchema> {
   const {
     embedder,
     collectionName,
