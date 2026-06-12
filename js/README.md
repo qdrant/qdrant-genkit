@@ -16,17 +16,17 @@ To use this plugin, specify it when you call `configureGenkit()`:
 import { qdrant } from 'genkitx-qdrant';
 
 const ai = genkit({
-    plugins: [
-        qdrant([
-            {
-                embedder: googleAI.embedder('text-embedding-004'),
-                collectionName: 'collectionName',
-                clientParams: {
-                    url: 'http://localhost:6333',
-                }
-            }
-        ]),
-    ],
+  plugins: [
+    qdrant([
+      {
+        embedder: googleAI.embedder('text-embedding-004'),
+        collectionName: 'collectionName',
+        clientParams: {
+          url: 'http://localhost:6333',
+        },
+      },
+    ]),
+  ],
 });
 ```
 
@@ -51,7 +51,7 @@ addition, there are a few optional parameters:
   metadataPayloadKey: 'metadata';
   ```
 
-- `dataTypePayloadKey`: Name of the payload filed with the document datatype. Defaults to "_content_type".
+- `dataTypePayloadKey`: Name of the payload filed with the document datatype. Defaults to "\_content_type".
 
   ```js
   dataTypePayloadKey: '_datatype';
@@ -76,7 +76,26 @@ export const qdrantIndexer = qdrantIndexerRef('collectionName', 'displayName');
 
 ```js
 // To export a retriever:
-export const qdrantRetriever = qdrantRetrieverRef('collectionName', 'displayName');
+export const qdrantRetriever = qdrantRetrieverRef(
+  'collectionName',
+  'displayName',
+);
 ```
 
 You can refer to [Retrieval-augmented generation](https://firebase.google.com/docs/genkit/rag) for a general discussion on indexers and retrievers.
+
+### Score boosting / fusion
+
+The retriever options accept optional `query` and `prefetch` fields, forwarded to the Qdrant [Query API](https://qdrant.tech/documentation/concepts/search/#query-api). When `query` is set, the embedded vector becomes a `prefetch` (overridable via `prefetch`) and `query` reranks the candidates, enabling formula boosting, fusion (RRF), and multi-stage prefetch. Omit both for a plain vector query.
+
+```js
+const docs = await ai.retrieve({
+  retriever: qdrantRetriever,
+  query: 'wireless headphones',
+  options: {
+    k: 20,
+    // Boost in-stock items.
+    query: { formula: { sum: ['$score', { mult: [0.2, 'in_stock'] }] } },
+  },
+});
+```

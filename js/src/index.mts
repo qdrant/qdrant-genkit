@@ -12,11 +12,17 @@ import { genkitPlugin } from 'genkit/plugin';
 import { v5 as uuidv5 } from 'uuid';
 
 const FilterType: z.ZodType<Schemas['Filter']> = z.any();
+const PrefetchType: z.ZodType<Schemas['Prefetch'] | Schemas['Prefetch'][]> =
+  z.any();
+const QueryType: z.ZodType<Schemas['Query']> = z.any();
 
 const QdrantRetrieverOptionsSchema = CommonRetrieverOptionsSchema.extend({
   k: z.number().default(10),
   filter: FilterType.optional(),
   scoreThreshold: z.number().optional(),
+  // Optional Query API passthrough for formula boosting / fusion (RRF).
+  prefetch: PrefetchType.optional(),
+  query: QueryType.optional(),
 });
 
 export const QdrantIndexerOptionsSchema = z.null().optional();
@@ -74,7 +80,10 @@ interface QdrantPluginParams<E extends z.ZodTypeAny = z.ZodTypeAny> {
  * @param params.displayName  A display name for the retriever. If not specified, the default label will be `Qdrant - <collectionName>`
  * @returns A reference to a Qdrant retriever.
  */
-export const qdrantRetrieverRef = (collectionName: string, displayName: string | null = null) => {
+export const qdrantRetrieverRef = (
+  collectionName: string,
+  displayName: string | null = null,
+) => {
   return retrieverRef({
     name: `qdrant/${collectionName}`,
     info: {
@@ -91,7 +100,10 @@ export const qdrantRetrieverRef = (collectionName: string, displayName: string |
  * @param params.displayName  A display name for the indexer. If not specified, the default label will be `Qdrant - <collectionName>`
  * @returns A reference to a Qdrant indexer.
  */
-export const qdrantIndexerRef = (collectionName: string, displayName: string | null = null) => {
+export const qdrantIndexerRef = (
+  collectionName: string,
+  displayName: string | null = null,
+) => {
   return indexerRef({
     name: `qdrant/${collectionName}`,
     info: {
@@ -143,9 +155,13 @@ export function configureQdrantRetriever<
         content,
         options: embedderOptions,
       });
+      const embedding = queryEmbeddings[0].embedding;
       const results = (
         await client.query(collectionName, {
-          query: queryEmbeddings[0].embedding,
+          prefetch: options.query
+            ? (options.prefetch ?? { query: embedding, limit: options.k })
+            : undefined,
+          query: options.query ?? embedding,
           limit: options.k,
           filter: options.filter,
           score_threshold: options.scoreThreshold,
