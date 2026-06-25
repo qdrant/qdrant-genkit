@@ -24,12 +24,23 @@ const QdrantRetrieverOptionsSchema: z.ZodObject<{
   scoreThreshold: z.ZodOptional<z.ZodNumber>;
   prefetch: z.ZodOptional<typeof PrefetchType>;
   query: z.ZodOptional<typeof QueryType>;
+  groupBy: z.ZodOptional<z.ZodString>;
+  groupSize: z.ZodOptional<z.ZodNumber>;
 }> = CommonRetrieverOptionsSchema.extend({
   k: z.number().default(10),
   filter: FilterType.optional(),
   scoreThreshold: z.number().optional(),
   prefetch: PrefetchType.optional(),
   query: QueryType.optional(),
+  // When set, results are grouped by this payload field (e.g. a document id or
+  // category) via the Qdrant Grouping API, returning up to `groupSize` hits per
+  // group. This diversifies results so a single over-represented group cannot
+  // crowd out others. The group key is exposed on each returned document's
+  // metadata as the reserved `_group` field (overrides any same-named field in
+  // the document's own metadata). Documents are still returned as a flat list.
+  groupBy: z.string().min(1).optional(),
+  // Max hits per group when `groupBy` is set. Defaults to 3 (Qdrant default).
+  groupSize: z.number().int().positive().optional(),
 });
 
 export const QdrantIndexerOptionsSchema = z.null().optional();
@@ -37,6 +48,9 @@ export const QdrantIndexerOptionsSchema = z.null().optional();
 const CONTENT_PAYLOAD_KEY = 'content';
 const METADATA_PAYLOAD_KEY = 'metadata';
 const CONTENT_TYPE_KEY = '_content_type';
+// Qdrant's own default for `group_size` when grouping; used to size the
+// default prefetch candidate pool so reranking can fill `k` groups.
+const DEFAULT_GROUP_SIZE = 3;
 
 /**
  * Parameters for the Qdrant plugin.
@@ -166,32 +180,82 @@ export function configureQdrantRetriever<
         options: embedderOptions,
       });
       const embedding = queryEmbeddings[0].embedding;
-      const results = (
-        await client.query(collectionName, {
-          prefetch: options.query
-            ? (options.prefetch ?? { query: embedding, limit: options.k })
-            : undefined,
-          query: options.query ?? embedding,
-          limit: options.k,
-          filter: options.filter,
-          score_threshold: options.scoreThreshold,
-          with_payload: [contentKey, metadataKey, dataTypeKey],
-          with_vector: false,
-        })
-      ).points;
-      const documents = results.map((result) => {
-        const content = result.payload?.[contentKey] ?? '';
+      const withPayload = [contentKey, metadataKey, dataTypeKey];
+      // Shared mapper for both the flat and grouped paths: a scored point
+      // (`{ payload, score }`) becomes a Genkit Document. `extraMetadata` lets
+      // the grouped path attach the group key.
+      const toDocument = (
+        point: { payload?: Record<string, unknown> | null; score?: number },
+        extraMetadata: Record<string, unknown> = {},
+      ) => {
+        const content = point.payload?.[contentKey] ?? '';
         const metadata = {
-          ...(result.payload?.[metadataKey] ?? {}),
-          _similarityScore: result.score,
+          ...((point.payload?.[metadataKey] as Record<string, unknown>) ?? {}),
+          _similarityScore: point.score,
+          ...extraMetadata,
         } as Record<string, unknown>;
-        const dataType = result.payload?.[dataTypeKey] ?? 'text';
+        const dataType = point.payload?.[dataTypeKey] ?? 'text';
         return Document.fromData(
           content as string,
           dataType as string,
-          metadata as Record<string, unknown>,
+          metadata,
         ).toJSON();
-      });
+      };
+
+      // Prefetch/query reranking (formula boosting, fusion) applies to both the
+      // flat and grouped paths: when `query` is set the embedded vector becomes
+      // a prefetch (overridable) and `query` reranks the candidates.
+      // For grouping, `k` counts groups (not points), so the default prefetch
+      // must pull enough candidates to populate `k` groups of `groupSize` —
+      // otherwise reranking sees too few points to fill the groups.
+      const defaultPrefetchLimit = options.groupBy
+        ? options.k * (options.groupSize ?? DEFAULT_GROUP_SIZE)
+        : options.k;
+      const prefetch = options.query
+        ? (options.prefetch ?? {
+            query: embedding,
+            limit: defaultPrefetchLimit,
+          })
+        : undefined;
+      const query = options.query ?? embedding;
+
+      let documents: ReturnType<typeof toDocument>[];
+      if (options.groupBy) {
+        // Grouping API: up to `groupSize` hits per `groupBy` value, `k` groups.
+        // Diversifies results across the facet so one over-represented group
+        // (e.g. a large multi-chunk document, or a dominant category) cannot
+        // crowd out the rest. The group key is exposed on each document's
+        // metadata as `_group`; documents are still returned as a flat list.
+        const groups = (
+          await client.queryGroups(collectionName, {
+            prefetch,
+            query,
+            group_by: options.groupBy,
+            group_size: options.groupSize,
+            limit: options.k,
+            filter: options.filter,
+            score_threshold: options.scoreThreshold,
+            with_payload: withPayload,
+            with_vector: false,
+          })
+        ).groups;
+        documents = groups.flatMap((group) =>
+          group.hits.map((hit) => toDocument(hit, { _group: group.id })),
+        );
+      } else {
+        const results = (
+          await client.query(collectionName, {
+            prefetch,
+            query,
+            limit: options.k,
+            filter: options.filter,
+            score_threshold: options.scoreThreshold,
+            with_payload: withPayload,
+            with_vector: false,
+          })
+        ).points;
+        documents = results.map((result) => toDocument(result));
+      }
       return {
         documents,
       };
