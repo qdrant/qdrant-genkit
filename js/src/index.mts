@@ -24,12 +24,16 @@ const QdrantRetrieverOptionsSchema: z.ZodObject<{
   scoreThreshold: z.ZodOptional<z.ZodNumber>;
   prefetch: z.ZodOptional<typeof PrefetchType>;
   query: z.ZodOptional<typeof QueryType>;
+  groupBy: z.ZodOptional<z.ZodString>;
+  groupSize: z.ZodOptional<z.ZodNumber>;
 }> = CommonRetrieverOptionsSchema.extend({
   k: z.number().default(10),
   filter: FilterType.optional(),
   scoreThreshold: z.number().optional(),
   prefetch: PrefetchType.optional(),
   query: QueryType.optional(),
+  groupBy: z.string().min(1).optional(),
+  groupSize: z.number().int().positive().optional(),
 });
 
 export const QdrantIndexerOptionsSchema = z.null().optional();
@@ -37,6 +41,7 @@ export const QdrantIndexerOptionsSchema = z.null().optional();
 const CONTENT_PAYLOAD_KEY = 'content';
 const METADATA_PAYLOAD_KEY = 'metadata';
 const CONTENT_TYPE_KEY = '_content_type';
+const DEFAULT_GROUP_SIZE = 3;
 
 /**
  * Parameters for the Qdrant plugin.
@@ -166,32 +171,71 @@ export function configureQdrantRetriever<
         options: embedderOptions,
       });
       const embedding = queryEmbeddings[0].embedding;
-      const results = (
-        await client.query(collectionName, {
-          prefetch: options.query
-            ? (options.prefetch ?? { query: embedding, limit: options.k })
-            : undefined,
-          query: options.query ?? embedding,
-          limit: options.k,
-          filter: options.filter,
-          score_threshold: options.scoreThreshold,
-          with_payload: [contentKey, metadataKey, dataTypeKey],
-          with_vector: false,
-        })
-      ).points;
-      const documents = results.map((result) => {
-        const content = result.payload?.[contentKey] ?? '';
+      const withPayload = [contentKey, metadataKey, dataTypeKey];
+
+      const toDocument = (
+        point: { payload?: Record<string, unknown> | null; score?: number },
+        extraMetadata: Record<string, unknown> = {},
+      ) => {
+        const content = point.payload?.[contentKey] ?? '';
         const metadata = {
-          ...(result.payload?.[metadataKey] ?? {}),
-          _similarityScore: result.score,
+          ...((point.payload?.[metadataKey] as Record<string, unknown>) ?? {}),
+          _similarityScore: point.score,
+          ...extraMetadata,
         } as Record<string, unknown>;
-        const dataType = result.payload?.[dataTypeKey] ?? 'text';
+        const dataType = point.payload?.[dataTypeKey] ?? 'text';
         return Document.fromData(
           content as string,
           dataType as string,
-          metadata as Record<string, unknown>,
+          metadata,
         ).toJSON();
-      });
+      };
+
+      // When grouping, `k` is the group count, so size the default prefetch for
+      // `k * groupSize` candidates.
+      const defaultPrefetchLimit = options.groupBy
+        ? options.k * (options.groupSize ?? DEFAULT_GROUP_SIZE)
+        : options.k;
+      const prefetch = options.query
+        ? (options.prefetch ?? {
+            query: embedding,
+            limit: defaultPrefetchLimit,
+          })
+        : undefined;
+      const query = options.query ?? embedding;
+
+      let documents: ReturnType<typeof toDocument>[];
+      if (options.groupBy) {
+        const groups = (
+          await client.queryGroups(collectionName, {
+            prefetch,
+            query,
+            group_by: options.groupBy,
+            group_size: options.groupSize,
+            limit: options.k,
+            filter: options.filter,
+            score_threshold: options.scoreThreshold,
+            with_payload: withPayload,
+            with_vector: false,
+          })
+        ).groups;
+        documents = groups.flatMap((group) =>
+          group.hits.map((hit) => toDocument(hit, { _group: group.id })),
+        );
+      } else {
+        const results = (
+          await client.query(collectionName, {
+            prefetch,
+            query,
+            limit: options.k,
+            filter: options.filter,
+            score_threshold: options.scoreThreshold,
+            with_payload: withPayload,
+            with_vector: false,
+          })
+        ).points;
+        documents = results.map((result) => toDocument(result));
+      }
       return {
         documents,
       };

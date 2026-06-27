@@ -99,3 +99,22 @@ const docs = await ai.retrieve({
   },
 });
 ```
+
+### Grouped retrieval (diversity)
+
+Set the optional `groupBy` field (an indexed payload field) to use the Qdrant [Grouping API](https://qdrant.tech/documentation/concepts/search/#grouping-api). Qdrant returns up to `groupSize` hits per group (default 3) across `k` groups, so one over-represented group (a large document split into many chunks, say) can't crowd out the rest. The retriever flattens the groups in order and writes each group key to the document's `_group` metadata, so keep the returned order. Re-sorting by `_similarityScore` interleaves the groups.
+
+```js
+const docs = await ai.retrieve({
+  retriever: qdrantRetriever,
+  query: 'fire-rated pipe penetration',
+  options: {
+    k: 8, // up to 8 groups
+    groupBy: 'metadata.productFamily',
+    groupSize: 3, // up to 3 chunks per family
+    filter: {
+      must: [{ key: 'metadata.wallType', match: { value: 'flexible' } }],
+    },
+  },
+});
+```
