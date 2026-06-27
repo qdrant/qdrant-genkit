@@ -32,8 +32,6 @@ const QdrantRetrieverOptionsSchema: z.ZodObject<{
   scoreThreshold: z.number().optional(),
   prefetch: PrefetchType.optional(),
   query: QueryType.optional(),
-  // Payload field to group results by (Qdrant Grouping API). The group key is
-  // set on each document's metadata as `_group`.
   groupBy: z.string().min(1).optional(),
   groupSize: z.number().int().positive().optional(),
 });
@@ -174,7 +172,7 @@ export function configureQdrantRetriever<
       });
       const embedding = queryEmbeddings[0].embedding;
       const withPayload = [contentKey, metadataKey, dataTypeKey];
-      // Maps a scored point to a Document; `extraMetadata` carries the group key.
+
       const toDocument = (
         point: { payload?: Record<string, unknown> | null; score?: number },
         extraMetadata: Record<string, unknown> = {},

@@ -102,7 +102,7 @@ const docs = await ai.retrieve({
 
 ### Grouped retrieval (diversity)
 
-The retriever options accept an optional `groupBy` field (with optional `groupSize`), forwarded to the Qdrant [Grouping API](https://qdrant.tech/documentation/concepts/search/#grouping-api). When `groupBy` is set, results are grouped by that payload field and up to `groupSize` hits are returned per group (defaults to Qdrant's default of 3), across `k` groups. This diversifies results so a single over-represented group — e.g. one large document split into many chunks, or one dominant category — cannot crowd out the rest. Documents are returned as a flat list, group-ordered, with the group key exposed on each document's metadata as the reserved `_group` field (which overrides any same-named field in the document's own metadata). The `groupBy` field must be indexed. Note: re-sorting the returned documents by `_similarityScore` interleaves groups and undoes the diversity — keep the returned order to preserve grouping.
+Set the optional `groupBy` field (an indexed payload field) to use the Qdrant [Grouping API](https://qdrant.tech/documentation/concepts/search/#grouping-api). Qdrant returns up to `groupSize` hits per group (default 3) across `k` groups, so one over-represented group (a large document split into many chunks, say) can't crowd out the rest. The retriever flattens the groups in order and writes each group key to the document's `_group` metadata, so keep the returned order. Re-sorting by `_similarityScore` interleaves the groups.
 
 ```js
 const docs = await ai.retrieve({
