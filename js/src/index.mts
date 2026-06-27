@@ -32,14 +32,9 @@ const QdrantRetrieverOptionsSchema: z.ZodObject<{
   scoreThreshold: z.number().optional(),
   prefetch: PrefetchType.optional(),
   query: QueryType.optional(),
-  // When set, results are grouped by this payload field (e.g. a document id or
-  // category) via the Qdrant Grouping API, returning up to `groupSize` hits per
-  // group. This diversifies results so a single over-represented group cannot
-  // crowd out others. The group key is exposed on each returned document's
-  // metadata as the reserved `_group` field (overrides any same-named field in
-  // the document's own metadata). Documents are still returned as a flat list.
+  // Payload field to group results by (Qdrant Grouping API). The group key is
+  // set on each document's metadata as `_group`.
   groupBy: z.string().min(1).optional(),
-  // Max hits per group when `groupBy` is set. Defaults to 3 (Qdrant default).
   groupSize: z.number().int().positive().optional(),
 });
 
@@ -48,8 +43,6 @@ export const QdrantIndexerOptionsSchema = z.null().optional();
 const CONTENT_PAYLOAD_KEY = 'content';
 const METADATA_PAYLOAD_KEY = 'metadata';
 const CONTENT_TYPE_KEY = '_content_type';
-// Qdrant's own default for `group_size` when grouping; used to size the
-// default prefetch candidate pool so reranking can fill `k` groups.
 const DEFAULT_GROUP_SIZE = 3;
 
 /**
@@ -181,9 +174,7 @@ export function configureQdrantRetriever<
       });
       const embedding = queryEmbeddings[0].embedding;
       const withPayload = [contentKey, metadataKey, dataTypeKey];
-      // Shared mapper for both the flat and grouped paths: a scored point
-      // (`{ payload, score }`) becomes a Genkit Document. `extraMetadata` lets
-      // the grouped path attach the group key.
+      // Maps a scored point to a Document; `extraMetadata` carries the group key.
       const toDocument = (
         point: { payload?: Record<string, unknown> | null; score?: number },
         extraMetadata: Record<string, unknown> = {},
@@ -202,12 +193,8 @@ export function configureQdrantRetriever<
         ).toJSON();
       };
 
-      // Prefetch/query reranking (formula boosting, fusion) applies to both the
-      // flat and grouped paths: when `query` is set the embedded vector becomes
-      // a prefetch (overridable) and `query` reranks the candidates.
-      // For grouping, `k` counts groups (not points), so the default prefetch
-      // must pull enough candidates to populate `k` groups of `groupSize` —
-      // otherwise reranking sees too few points to fill the groups.
+      // When grouping, `k` is the group count, so size the default prefetch for
+      // `k * groupSize` candidates.
       const defaultPrefetchLimit = options.groupBy
         ? options.k * (options.groupSize ?? DEFAULT_GROUP_SIZE)
         : options.k;
@@ -221,11 +208,6 @@ export function configureQdrantRetriever<
 
       let documents: ReturnType<typeof toDocument>[];
       if (options.groupBy) {
-        // Grouping API: up to `groupSize` hits per `groupBy` value, `k` groups.
-        // Diversifies results across the facet so one over-represented group
-        // (e.g. a large multi-chunk document, or a dominant category) cannot
-        // crowd out the rest. The group key is exposed on each document's
-        // metadata as `_group`; documents are still returned as a flat list.
         const groups = (
           await client.queryGroups(collectionName, {
             prefetch,
